@@ -20,7 +20,8 @@ local T = require("ffi/util").template
 
 local FileSearcher = InputContainer:extend{
     case_sensitive = false,
-    include_subfolders = true,
+    -- [SEB] Prevent searching in sub-folders by default
+    include_subfolders = false,
     include_metadata = false,
 }
 
