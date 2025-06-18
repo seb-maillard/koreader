@@ -289,7 +289,8 @@ function FileChooser:getMenuItemMandatory(item, collate)
         if collate.mandatory_func ~= nil then
             text = collate.mandatory_func(item)
         else
-            text = util.getFriendlySize(item.attr.size or 0)
+            -- [SEB] Hide file size
+            text = ""
         end
         if ReadCollection:isFileInCollections(item.path) then
             text = "☆ " .. text
