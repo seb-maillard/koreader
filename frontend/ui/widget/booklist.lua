@@ -62,7 +62,8 @@ BookList.collates = {
             end
         end,
         mandatory_func = function(item)
-            return datetime.secondsToDateTime(item.attr.modification)
+            -- [SEB] Shorter date format
+            return os.date(("%Y-%m-%d"), item.attr.modification)
         end,
     },
     size = {
