@@ -156,7 +156,19 @@ function Profiles:getSubMenuItems()
                                 return v.settings.auto_exec_ask
                             end,
                             callback = function()
-                                self.data[k].settings.auto_exec_ask = not v.settings.auto_exec_ask and true or nil
+                                self.data[k].settings.auto_exec_ask = not v.settings.auto_exec_ask or nil
+                                self.updated = true
+                            end,
+                        },
+                        {
+                            text = _("Execute promptly"),
+                            help_text = _([[Enable this option to execute the profile before some other operations triggered by the event.
+For example, with a trigger "on document closing" the profile will be executed before the document is closed.]]),
+                            checked_func = function()
+                                return v.settings.auto_exec_promptly
+                            end,
+                            callback = function()
+                                self.data[k].settings.auto_exec_promptly = not v.settings.auto_exec_promptly or nil
                                 self.updated = true
                             end,
                         },
@@ -214,11 +226,13 @@ function Profiles:getSubMenuItems()
                         self:genAutoExecMenuItem(_("on KOReader start"), "Start", k),
                         self:genAutoExecMenuItem(_("on wake-up"), "Resume", k),
                         self:genAutoExecMenuItem(_("on exiting sleep screen"), "OutOfScreenSaver", k),
+                        self:genAutoExecMenuItem(_("on read timer expiry"), "ReadTimerExpired", k),
                         self:genAutoExecMenuItem(_("on rotation"), "SetRotationMode", k),
                         self:genAutoExecMenuItem(_("on showing folder"), "PathChanged", k, true),
                         -- separator
                         self:genAutoExecMenuItem(_("on book opening"), "ReaderReadyAll", k),
                         self:genAutoExecMenuItem(_("on book closing"), "CloseDocumentAll", k),
+                        max_per_page = 11,
                     }
                 end,
                 hold_callback = function(touchmenu_instance)
@@ -236,7 +250,7 @@ function Profiles:getSubMenuItems()
                     return v.settings.notify
                 end,
                 callback = function()
-                    self.data[k].settings.notify = not v.settings.notify and true or nil
+                    self.data[k].settings.notify = not v.settings.notify or nil
                     self.updated = true
                 end,
                 separator = true,
@@ -629,10 +643,10 @@ function Profiles:genAutoExecPathChangedMenuItem(text, event, profile_name, sepa
                         local value = util.tableGetValue(self.autoexec, event, profile_name, condition)
                         return value and txt .. ": " .. value or txt
                     end,
-                    no_refresh_on_check = true,
                     checked_func = function()
                         return util.tableGetValue(self.autoexec, event, profile_name, condition)
                     end,
+                    check_callback_updates_menu = true,
                     callback = function(touchmenu_instance)
                         local dialog
                         local buttons = {{
@@ -760,10 +774,10 @@ function Profiles:genAutoExecDocConditionalMenuItem(text, event, profile_name, s
                                     local txt = util.tableGetValue(self.autoexec, event, profile_name, condition, prop)
                                     return txt and title .. " " .. txt or title:sub(1, -2)
                                 end,
-                                no_refresh_on_check = true,
                                 checked_func = function()
                                     return util.tableGetValue(self.autoexec, event, profile_name, condition, prop) and true
                                 end,
+                                check_callback_updates_menu = true,
                                 callback = function(touchmenu_instance)
                                     local dialog
                                     local buttons = self.document == nil and {} or {{
@@ -830,10 +844,10 @@ function Profiles:genAutoExecDocConditionalMenuItem(text, event, profile_name, s
                     enabled_func = function()
                         return not util.tableGetValue(self.autoexec, event_always, profile_name)
                     end,
-                    no_refresh_on_check = true,
                     checked_func = function()
                         return util.tableGetValue(self.autoexec, event, profile_name, conditions[3][2]) and true
                     end,
+                    check_callback_updates_menu = true,
                     callback = function(touchmenu_instance)
                         local condition = conditions[3][2]
                         local dialog
@@ -895,10 +909,10 @@ function Profiles:genAutoExecDocConditionalMenuItem(text, event, profile_name, s
                     enabled_func = function()
                         return not util.tableGetValue(self.autoexec, event_always, profile_name)
                     end,
-                    no_refresh_on_check = true,
                     checked_func = function()
                         return util.tableGetValue(self.autoexec, event, profile_name, conditions[4][2]) and true
                     end,
+                    check_callback_updates_menu = true,
                     callback = function(touchmenu_instance)
                         local condition = conditions[4][2]
                         local collections = util.tableGetValue(self.autoexec, event, profile_name, condition)
@@ -964,6 +978,10 @@ end
 
 function Profiles:onOutOfScreenSaver() -- global
     self:executeAutoExecEvent("OutOfScreenSaver")
+end
+
+function Profiles:onReadTimerExpired() -- global by ReadTimer plugin
+    self:executeAutoExecEvent("ReadTimerExpired")
 end
 
 function Profiles:onSetRotationMode(mode) -- global
@@ -1053,20 +1071,25 @@ function Profiles:executeAutoExec(profile_name, event)
             ok_callback = function()
                 logger.dbg("Profiles - auto executing:", profile_name)
                 UIManager:nextTick(function()
-                    Dispatcher:execute(self.data[profile_name])
+                    Dispatcher:execute(profile)
                 end)
             end,
         })
     else
-        logger.dbg("Profiles - auto executing:", profile_name)
-        if event == "CloseDocument" or event == "CloseDocumentAll" then
-            UIManager:tickAfterNext(function()
-                Dispatcher:execute(self.data[profile_name])
-            end)
+        if profile.settings.auto_exec_promptly then
+            logger.dbg("Profiles - auto executing promptly:", profile_name)
+            Dispatcher:execute(profile)
         else
-            UIManager:nextTick(function()
-                Dispatcher:execute(self.data[profile_name])
-            end)
+            logger.dbg("Profiles - auto executing:", profile_name)
+            if event == "CloseDocument" or event == "CloseDocumentAll" then
+                UIManager:tickAfterNext(function()
+                    Dispatcher:execute(profile)
+                end)
+            else
+                UIManager:nextTick(function()
+                    Dispatcher:execute(profile)
+                end)
+            end
         end
     end
 end

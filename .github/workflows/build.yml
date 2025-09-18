@@ -35,6 +35,7 @@ jobs:
       # Bump first number to reset all caches.
       CACHE_KEY: "1-macOS-${{ matrix.image }}-${{ matrix.platform }}-XC${{ matrix.xcode_version }}-DT${{ matrix.deployment_target }}"
       CLICOLOR_FORCE: '1'
+      KODEBUG: ""
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
       MAKEFLAGS: 'OUTPUT_DIR=build INSTALL_DIR=install TARGET=macos'
 
@@ -49,7 +50,7 @@ jobs:
           xcode-select -p
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -57,7 +58,7 @@ jobs:
         run: |
           set -x
           python3 -m pip install --disable-pip-version-check meson ruamel.yaml
-          wget -O ninjatracing.zip https://github.com/nico/ninjatracing/archive/a669e3644cf22b29cbece31dbed2cfbf34e5f48e.zip
+          wget -O ninjatracing.zip https://github.com/cradleapps/ninjatracing/archive/084212eaf68f25c70579958a2ed67fb4ec2a9ca4.zip
           unzip -j ninjatracing.zip '*/ninjatracing'
           install -m755 ninjatracing /usr/local/bin/
           rm ninjatracing*
@@ -74,7 +75,6 @@ jobs:
             nasm
             ninja
             pkg-config
-            sdl2
             util-linux
           )
           # Don't auto-update.
@@ -99,7 +99,7 @@ jobs:
       # Checkout / fetch. {{{
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           clean: false
           fetch-depth: 0
@@ -111,8 +111,6 @@ jobs:
 
       # }}}
 
-      # Restore / setup caches. {{{
-
       - name: Generate cache key
         run: make TARGET= cache-key
 
@@ -122,6 +120,8 @@ jobs:
         with:
           path: build
           key: ${{ env.CACHE_KEY }}-build-${{ hashFiles('cache-key') }}
+
+      # Restore / setup build cache. {{{
 
       - name: Lookup or restore build cache
         id: ccache-restore
@@ -166,7 +166,7 @@ jobs:
 
       # }}}
 
-      # Clean / save caches. {{{
+      # Clean / save build cache. {{{
 
       - name: Clean caches
         if: contains('failure success', steps.build.conclusion) && !cancelled()
@@ -184,13 +184,6 @@ jobs:
           path: /Users/runner/Library/Caches/ccache
           key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
 
-      - name: Save build directory
-        uses: actions/cache/save@v4
-        if: steps.build-restore.outputs.cache-hit != 'true'
-        with:
-          path: build
-          key: ${{ steps.build-restore.outputs.cache-primary-key }}
-
       # }}}
 
       # Dump & check binaries. {{{
@@ -202,6 +195,13 @@ jobs:
         run: make bincheck
 
       # }}}
+
+      - name: Save build directory
+        uses: actions/cache/save@v4
+        if: steps.build-restore.outputs.cache-hit != 'true'
+        with:
+          path: build
+          key: ${{ steps.build-restore.outputs.cache-primary-key }}
 
       - name: Test
         run: ./base/utils/fake_tty.py make --assume-old=base testfront

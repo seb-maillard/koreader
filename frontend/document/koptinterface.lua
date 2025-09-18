@@ -297,7 +297,7 @@ function KoptInterface:reflowPage(doc, pageno, bbox, background)
         kc:setPreCache()
         self.bg_thread = true
     end
-    -- Caculate zoom.
+    -- Calculate zoom.
     kc.zoom = (1.5 * kc.zoom * kc.quality * kc.dev_width) / bbox.x1
     -- Generate pixmap.
     local page = doc._document:openPage(pageno)
@@ -833,7 +833,9 @@ function KoptInterface:getNativeOCRWord(doc, pageno, rect)
             kc.getTOCRWord, kc, "src",
             0, 0, word_w, word_h,
             self.tessocr_data, self.ocr_lang, self.ocr_type, 0, 1)
-        DocCache:insert(hash, CacheItem:new{ ocrword = word, size = #word + 64 }) -- estimation
+        if word then
+            DocCache:insert(hash, CacheItem:new{ ocrword = word, size = #word + 64 }) -- estimation
+        end
         logger.dbg("word", word)
         page:close()
         kc:free()
@@ -1433,7 +1435,7 @@ end
 local function get_pattern_list(pattern, case_insensitive)
     -- pattern list of single words
     local plist = {}
-    -- (as in util.splitToWords(), but only splitting on spaces, keeping punctuations)
+    -- (as in util.splitToWords(), but only splitting on spaces, keeping punctuation marks)
     for word in util.gsplit(pattern, "%s+") do
         if util.hasCJKChar(word) then
             for char in util.gsplit(word, "[\192-\255][\128-\191]+", true) do
