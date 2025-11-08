@@ -208,7 +208,11 @@ function Remarkable:init()
     -- os.execute("ps | grep $PPID")
     -- logger.info(string.format("parent process is oxide?: %s", parent_process_is_oxide))
 
-    self.screen = require("ffi/framebuffer_mxcfb"):new{device = self, debug = logger.dbg}
+    self.screen = require("ffi/framebuffer_mxcfb"):new{
+        device = self,
+        debug = logger.dbg,
+        wf_level = G_reader_settings:readSetting("wf_level") or 2,
+    }
     self.powerd = require("device/remarkable/powerd"):new{
         device = self,
         capacity_file = self.battery_path,
@@ -226,7 +230,7 @@ function Remarkable:init()
 
     self.input = require("device/input"):new{
         device = self,
-        event_map = dofile("frontend/device/remarkable/event_map.lua"),
+        event_map = event_map,
         event_map_adapter = {
             SleepCover = function(ev)
                 if ev.value == 1 then
@@ -458,16 +462,16 @@ elseif is_rmpp then
     if not is_qtfb_shimmed then
         error("reMarkable Paper Pro requires a RM2FB server and client to work (https://github.com/asivery/rm-appload)")
     end
-    if os.getenv("QTFB_SHIM_MODE") ~= "RGB565" then
-        error("You must set QTFB_SHIM_MODE to RGB565")
+    if os.getenv("QTFB_SHIM_MODE") ~= "N_RGB565" then
+        error("You must set QTFB_SHIM_MODE to N_RGB565")
     end
     return RemarkablePaperPro
 elseif is_rmppm then
     if not is_qtfb_shimmed then
         error("reMarkable Paper Pro Move requires a RM2FB server and client to work (https://github.com/asivery/rm-appload)")
     end
-    if os.getenv("QTFB_SHIM_MODE") ~= "RGB565" then
-        error("You must set QTFB_SHIM_MODE to RGB565")
+    if os.getenv("QTFB_SHIM_MODE") ~= "N_RGB565" then
+        error("You must set QTFB_SHIM_MODE to N_RGB565")
     end
     return RemarkablePaperProMove
 else
