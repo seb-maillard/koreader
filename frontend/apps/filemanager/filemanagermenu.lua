@@ -8,7 +8,6 @@ local InputContainer = require("ui/widget/container/inputcontainer")
 local KeyValuePage = require("ui/widget/keyvaluepage")
 local PluginLoader = require("pluginloader")
 local SetDefaults = require("apps/filemanager/filemanagersetdefaults")
-local Size = require("ui/size")
 local SpinWidget = require("ui/widget/spinwidget")
 local UIManager = require("ui/uimanager")
 local Screen = Device.screen
@@ -27,7 +26,17 @@ local FileManagerMenu = InputContainer:extend{
     registered_widgets = nil, -- array
 }
 
-local function getDefaultMenuButtons()
+function FileManagerMenu:init()
+    self.menu_items = self:getDefaultMenuButtons()
+
+    self.registered_widgets = {}
+
+    self:registerKeyEvents()
+
+    self.activation_menu = G_reader_settings:readSetting("activate_menu") or "swipe_tap"
+end
+
+function FileManagerMenu:getDefaultMenuButtons()
     return {
         ["KOMenu:menu_buttons"] = {
             -- top menu
@@ -37,18 +46,16 @@ local function getDefaultMenuButtons()
         setting = { icon = "appbar.settings" },
         tools = { icon = "appbar.tools" },
         search = { icon = "appbar.search" },
+        reader = {
+            icon = "book.opened",
+            remember = false,
+            callback = function()
+                self:onCloseFileManagerMenu()
+                self.ui:onOpenLastDoc()
+            end,
+        },
         main = { icon = "appbar.menu" },
     }
-end
-
-function FileManagerMenu:init()
-    self.menu_items = getDefaultMenuButtons()
-
-    self.registered_widgets = {}
-
-    self:registerKeyEvents()
-
-    self.activation_menu = G_reader_settings:readSetting("activate_menu") or "swipe_tap"
 end
 
 function FileManagerMenu:registerKeyEvents()
@@ -57,17 +64,13 @@ function FileManagerMenu:registerKeyEvents()
         if Device:hasFewKeys() then
             self.key_events.KeyPressShowMenu = { { { "Menu", "Right" } } }
         end
-        -- OpenLastDoc = { { "ScreenKB", "Back" } } handled by hotkeys
     end
 end
 
 function FileManagerMenu:onPhysicalKeyboardConnected()
     self.key_events = {}
     self:registerKeyEvents()
-    if self.menu_container then
-        self:onCloseFileManagerMenu()
-    end
-    self.tab_item_table = nil
+    self:onRebuildMenu()
 end
 FileManagerMenu.onPhysicalKeyboardDisconnected = FileManagerMenu.onPhysicalKeyboardConnected
 
@@ -127,29 +130,8 @@ function FileManagerMenu:initGesListener()
     })
 end
 
-function FileManagerMenu:onOpenLastDoc()
-    local last_file = G_reader_settings:readSetting("lastfile")
-    if not last_file or lfs.attributes(last_file, "mode") ~= "file" then
-        local InfoMessage = require("ui/widget/infomessage")
-        UIManager:show(InfoMessage:new{
-            text = _("Cannot open last document"),
-        })
-        return
-    end
-
-    -- Only close menu if we were called from the menu
-    if self.menu_container then
-        -- Mimic's FileManager's onShowingReader refresh optimizations
-        self.ui.tearing_down = true
-        self.ui.dithered = nil
-        self:onCloseFileManagerMenu()
-    end
-
-    self.ui:openFile(last_file)
-end
-
 function FileManagerMenu:setUpdateItemTable()
-    for k, v in pairs(getDefaultMenuButtons()) do
+    for k, v in pairs(self:getDefaultMenuButtons()) do
         self.menu_items[k] = v
     end
     local FileChooser = self.ui.file_chooser
@@ -190,7 +172,7 @@ function FileManagerMenu:setUpdateItemTable()
                         callback = function(touchmenu_instance)
                             local default_value = FileChooser.items_per_page_default
                             local current_value = G_reader_settings:readSetting("items_per_page") or default_value
-                            local widget = SpinWidget:new{
+                            UIManager:show(SpinWidget:new{
                                 title_text =  _("Items per page"),
                                 value = current_value,
                                 value_min = 6,
@@ -202,8 +184,7 @@ function FileManagerMenu:setUpdateItemTable()
                                     FileChooser:refreshPath()
                                     touchmenu_instance:updateItems()
                                 end,
-                            }
-                            UIManager:show(widget)
+                            })
                         end,
                     },
                     {
@@ -216,7 +197,7 @@ function FileManagerMenu:setUpdateItemTable()
                             local default_value = FileChooser.getItemFontSize(G_reader_settings:readSetting("items_per_page")
                                 or FileChooser.items_per_page_default)
                             local current_value = FileChooser.font_size or default_value
-                            local widget = SpinWidget:new{
+                            UIManager:show(SpinWidget:new{
                                 title_text =  _("Item font size"),
                                 value = current_value,
                                 value_min = 10,
@@ -235,8 +216,7 @@ function FileManagerMenu:setUpdateItemTable()
                                     FileChooser:refreshPath()
                                     touchmenu_instance:updateItems()
                                 end,
-                            }
-                            UIManager:show(widget)
+                            })
                         end,
                     },
                     {
@@ -326,7 +306,7 @@ function FileManagerMenu:setUpdateItemTable()
                         separator = true,
                     },
                     {
-                        text = _("Show filename in Open last/previous menu items"),
+                        text = _("Show filename in Open previous menu items"),
                         checked_func = function()
                             return G_reader_settings:isTrue("open_last_menu_show_filename")
                         end,
@@ -421,7 +401,8 @@ To:
             {
                 text_func = function()
                     local nb_items_landscape, nb_items_portrait = KeyValuePage.getCurrentItemsPerPage()
-                    return T(_("Info lists items per page: %1 / %2"), nb_items_portrait, nb_items_landscape)
+                    return T(_("Info lists items per page: %1"),
+                        Screen:getHeight() > Screen:getWidth() and nb_items_portrait or nb_items_landscape)
                 end,
                 help_text = _([[This sets the number of items per page in:
 - Book information
@@ -433,7 +414,7 @@ To:
                     local nb_items_landscape_default, nb_items_portrait_default = KeyValuePage.getDefaultItemsPerPage()
                     local nb_items_landscape, nb_items_portrait =
                         KeyValuePage.getCurrentItemsPerPage(nb_items_landscape_default, nb_items_portrait_default)
-                    local widget = DoubleSpinWidget:new{
+                    UIManager:show(DoubleSpinWidget:new{
                         title_text =  _("Info lists items per page"),
                         width_factor = 0.6,
                         left_text = _("Portrait"),
@@ -462,8 +443,7 @@ To:
                             end
                             touchmenu_instance:updateItems()
                         end,
-                    }
-                    UIManager:show(widget)
+                    })
                 end,
             },
         },
@@ -478,6 +458,20 @@ To:
         end,
         callback = function()
             G_reader_settings:flipNilOrFalse("reverse_collate")
+            FileChooser:refreshPath()
+        end,
+    }
+    self.menu_items.sort_ignore_articles = {
+        text = _("Ignore leading articles"),
+        enabled_func = function()
+            return FileChooser:getCollate().compares_names ~= false
+        end,
+        checked_func = function()
+            return FileChooser:getCollate().compares_names ~= false and G_reader_settings:isTrue("sort_ignore_articles")
+        end,
+        callback = function()
+            G_reader_settings:flipNilOrFalse("sort_ignore_articles")
+            BookList.updateSortTextFunc()
             FileChooser:refreshPath()
         end,
     }
@@ -829,25 +823,25 @@ To:
     self.menu_items.open_last_document = {
         text_func = function()
             if not G_reader_settings:isTrue("open_last_menu_show_filename") or G_reader_settings:hasNot("lastfile") then
-                return _("Open last document")
+                return _("Open previous document")
             end
             local last_file = G_reader_settings:readSetting("lastfile")
             local path, file_name = util.splitFilePathName(last_file) -- luacheck: no unused
-            return T(_("Last: %1"), BD.filename(file_name))
+            return T(_("Previous: %1"), BD.filename(file_name))
         end,
         enabled_func = function()
             return G_reader_settings:has("lastfile")
         end,
         callback = function()
-            self:onOpenLastDoc()
+            self.ui:onOpenLastDoc()
         end,
         hold_callback = function()
             local last_file = G_reader_settings:readSetting("lastfile")
             UIManager:show(ConfirmBox:new{
-                text = T(_("Would you like to open the last document: %1?"), BD.filepath(last_file)),
+                text = T(_("Would you like to open the previous document: %1?"), BD.filepath(last_file)),
                 ok_text = _("OK"),
                 ok_callback = function()
-                    self:onOpenLastDoc()
+                    self.ui:onOpenLastDoc()
                 end,
             })
         end
@@ -987,7 +981,7 @@ function FileManagerMenu:getStartWithMenuTable()
         { _("history"), "history" },
         { _("favorites"), "favorites" },
         { _("folder shortcuts"), "folder_shortcuts" },
-        { _("last file"), "last" },
+        { _("most recent document"), "last" },
     }
     local sub_item_table = {}
     for i, v in ipairs(start_withs) do
@@ -1004,12 +998,17 @@ function FileManagerMenu:getStartWithMenuTable()
     end
     return {
         text_func = function()
-            local start_with = G_reader_settings:readSetting("start_with") or "filemanager"
-            for i, v in ipairs(start_withs) do
-                if v[2] == start_with then
-                    return T(_("Start with: %1"), v[1])
+            local idx = 1 -- "filemanager" by default
+            local start_with = G_reader_settings:readSetting("start_with")
+            if start_with then
+                for i, v in ipairs(start_withs) do
+                    if v[2] == start_with then
+                        idx = i
+                        break
+                    end
                 end
             end
+            return T(_("Start with: %1"), start_withs[idx][1])
         end,
         sub_item_table = sub_item_table,
     }
@@ -1033,29 +1032,17 @@ function FileManagerMenu:onShowMenu(tab_index, do_not_show)
         dimen = Screen:getSize(),
     }
 
-    local main_menu
-    if Device:isTouchDevice() or Device:hasDPad() then
-        local TouchMenu = require("ui/widget/touchmenu")
-        main_menu = TouchMenu:new{
-            width = Screen:getWidth(),
-            last_index = tab_index or G_reader_settings:readSetting("filemanagermenu_tab_index") or 1,
-            tab_item_table = self.tab_item_table,
-            show_parent = menu_container,
-            not_shown = do_not_show,
-        }
-    else
-        local Menu = require("ui/widget/menu")
-        main_menu = Menu:new{
-            title = _("File manager menu"),
-            item_table = Menu.itemTableFromTouchMenu(self.tab_item_table),
-            width = Screen:getWidth() - (Size.margin.fullscreen_popout * 2),
-            show_parent = menu_container,
-        }
-    end
-
-    main_menu.close_callback = function()
-        self:onCloseFileManagerMenu()
-    end
+    local TouchMenu = require("ui/widget/touchmenu")
+    local main_menu = TouchMenu:new{
+        width = Screen:getWidth(),
+        last_index = tab_index or G_reader_settings:readSetting("filemanagermenu_tab_index") or 1,
+        tab_item_table = self.tab_item_table,
+        show_parent = menu_container,
+        not_shown = do_not_show,
+        close_callback = function()
+            self:onCloseFileManagerMenu()
+        end,
+    }
 
     menu_container[1] = main_menu
     -- maintain a reference to menu_container
@@ -1073,6 +1060,33 @@ function FileManagerMenu:onCloseFileManagerMenu()
     UIManager:close(self.menu_container)
     self.menu_container = nil
     return true
+end
+
+function FileManagerMenu:teardownMenu()
+    if self.menu_container then
+        self:onCloseFileManagerMenu()
+    end
+    self.tab_item_table = nil
+end
+
+function FileManagerMenu:onRebuildMenu()
+    local was_open = self.menu_container ~= nil
+    local state
+    if was_open and self.menu_container[1] then
+        state = self.menu_container[1]:getState()
+    end
+    self:teardownMenu()
+
+    if was_open then
+        UIManager:nextTick(function()
+            self:onShowMenu(nil, true)
+            local menu = self.menu_container[1]
+            if state and menu.restoreState then
+                menu:restoreState(state.path_stack, state.page)
+            end
+            UIManager:show(self.menu_container)
+        end)
+    end
 end
 
 function FileManagerMenu:_getTabIndexFromLocation(ges)

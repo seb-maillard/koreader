@@ -16,6 +16,7 @@ A button widget that shows text or an icon and handles callback when tapped.
 
 local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
+local Dbg = require("dbg")
 local Device = require("device")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
@@ -41,6 +42,7 @@ local Button = InputContainer:extend{
     checkmark = "  \u{2713}",
     lang = nil,
     icon = nil,
+    alpha = false,
     icon_width = Screen:scaleBySize(DGENERIC_ICON_SIZE), -- our icons are square
     icon_height = Screen:scaleBySize(DGENERIC_ICON_SIZE),
     icon_rotation_angle = 0,
@@ -50,6 +52,11 @@ local Button = InputContainer:extend{
     enabled = true,
     hidden = false,
     allow_hold_when_disabled = false,
+    focusable = true, -- if false, the button won't be added to focusmanager.layout
+    -- Allow any button to have a physical key_binding(s), same shape as InputContainer.key_events
+    -- entries: a single key string, or an array of keys/modifier-key combinations.
+    key_bindings = nil,
+    hold_key_bindings = nil,
     margin = 0,
     bordersize = Size.border.button,
     background = nil, -- white by default
@@ -129,12 +136,7 @@ function Button:init()
         if not self.label_widget:isTruncated() then
             local checkmark_width = 0
             if self.checked_func and not self.checked_func() then
-                local tmp = TextWidget:new{
-                    text = self.checkmark,
-                    face = face,
-                }
-                checkmark_width = tmp:getSize().w
-                tmp:free()
+                checkmark_width = TextWidget.getTextWidth(self.checkmark, face, self.text_font_bold)
             end
             self._min_needed_width = self.label_widget:getSize().w + checkmark_width + outer_pad_width
         end
@@ -184,6 +186,7 @@ function Button:init()
     else
         self.label_widget = IconWidget:new{
             icon = self.icon,
+            alpha = self.alpha,
             rotation_angle = self.icon_rotation_angle,
             dim = not self.enabled,
             width = self.icon_width,
@@ -265,6 +268,32 @@ function Button:init()
             },
         }
     }
+    if self.key_bindings then
+        Dbg.dassert(type(self.key_bindings) == "string" or type(self.key_bindings) == "table",
+            "Button.key_bindings must be a string or a table")
+        local bind = type(self.key_bindings) == "string" and { self.key_bindings } or self.key_bindings
+        self.key_events.Shortcut = { bind }
+        self.onShortcut = function(this)
+            if this.enabled and this.callback then
+                this.callback()
+                return true
+            end
+            return false
+        end
+    end
+    if self.hold_key_bindings then
+        Dbg.dassert(type(self.hold_key_bindings) == "string" or type(self.hold_key_bindings) == "table",
+            "Button.hold_key_bindings must be a string or a table")
+        local bind = type(self.hold_key_bindings) == "string" and { self.hold_key_bindings } or self.hold_key_bindings
+        self.key_events.HoldShortcut = { bind }
+        self.onHoldShortcut = function(this)
+            if this.enabled and this.hold_callback then
+                this.hold_callback()
+                return true
+            end
+            return false
+        end
+    end
 end
 
 function Button:getMinNeededWidth()
@@ -396,10 +425,16 @@ end
 -- Used by onTapSelectButton to handle visual feedback when flash_ui is enabled
 function Button:_doFeedbackHighlight()
     -- NOTE: self[1] -> self.frame, if you're confused about what this does vs. onFocus/onUnfocus ;).
+    -- The frame's geometry is only known after the first paint.
+    if not (self[1] and self[1].dimen) then
+        logger.dbg("Button:", tostring(self), "attempted a feedback highlight in an unpainted frame!")
+        return
+    end
     if self.text then
         -- We only want the button's *highlight* to have rounded corners (otherwise they're redundant, same color as the bg).
         -- The nil check is to discriminate the default from callers that explicitly request a specific radius.
-        if self[1].radius == nil or self.background then
+        -- The frame may have no background: fall back to the invert flag.
+        if (self[1].radius == nil or self.background) and self[1].background then
             self[1].radius = Size.radius.button
             -- And here, it's easier to just invert the bg/fg colors ourselves,
             -- so as to preserve the rounded corners in one step.
@@ -421,8 +456,14 @@ function Button:_doFeedbackHighlight()
 end
 
 function Button:_undoFeedbackHighlight(is_translucent)
+    -- Same as in _doFeedbackHighlight().
+    if not (self[1] and self[1].dimen) then
+        logger.dbg("Button:", tostring(self), "attempted a feedback unhighlight in an unpainted frame!")
+        return
+    end
     if self.text then
-        if self[1].radius == Size.radius.button then
+        -- Only invert back what was inverted.
+        if self[1].radius == Size.radius.button and self[1].background then
             self[1].radius = nil
             self[1].background = self[1].background:invert()
             self.label_widget.fgcolor = self.label_widget.fgcolor:invert()

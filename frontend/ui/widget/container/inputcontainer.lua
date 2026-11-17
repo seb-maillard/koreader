@@ -32,6 +32,10 @@ This example illustrates how to listen for a key press input event via the `key_
 It is recommended to reference configurable sequences from another table
 and to store that table as a configuration setting.
 
+key_events is a table of event names, each of which maps to a list of key sequences.
+This class creates said table and populates it with a default Home key binding,
+Developers should avoid overriding the default key_events table to cleanly inherit the binding.
+
 ]]
 
 local DepGraph = require("depgraph")
@@ -54,6 +58,9 @@ function InputContainer:_init()
     -- These should be instance-specific
     if not self.key_events then
         self.key_events = {}
+    end
+    if Device:hasKeys() then
+        self.key_events.Home = { { "Home" } }
     end
     if not self.ges_events then
         self.ges_events = {}
@@ -290,6 +297,11 @@ InputContainer.isGestureAlwaysActive = InputContainer._isGestureAlwaysActive
 -- Filtered variant that only lets specific touch zones marked as "always active" through.
 -- (This is used by the "toggle_touch_input" Dispatcher action).
 function InputContainer:_onGestureFiltered(ev)
+    -- Gestures synthesised from focus (DPad/key) navigation aren't touch inputs, so they bypass the lock.
+    -- NOTE: _onGesture is always set while this handler is installed (see setIgnoreTouchInput).
+    if ev.from_focus_navigation then
+        return InputContainer._onGesture(self, ev)
+    end
     for _, tzone in ipairs(self._ordered_touch_zones) do
         if self:isGestureAlwaysActive(tzone.def.id, ev.multiswipe_directions) and tzone.gs_range:match(ev) and tzone.handler(ev) then
             return true
@@ -393,6 +405,35 @@ function InputContainer:onInput(input, ignore_first_hold_release)
     }
     UIManager:show(self.input_dialog)
     self.input_dialog:onShowKeyboard(ignore_first_hold_release)
+end
+
+function InputContainer:onHome()
+    if self.toast then return false end -- e.g., Notifications
+    -- GUARD: Only window-level widgets are allowed to participate in the daisy-chain.
+    -- This prevents sub-widgets from intercepting the event and causing an infinite loop.
+    if not UIManager:isWidgetShown(self) then
+        return false
+    end
+    local initial_top = UIManager:getTopmostVisibleWidget()
+    UIManager:setSuspendRepaints(true)
+    -- Safely dismantle the window-level widget
+    if type(self.onClose) == "function" then
+        logger.dbg("InputContainer:onHome triggered for widget:", self.name or tostring(self))
+        self:onClose()
+    end
+    local current_top = UIManager:getTopmostVisibleWidget()
+    if initial_top == current_top then
+        logger.dbg("InputContainer:onHome - Top widget unchanged. Halting daisy-chain.")
+        -- Lift the muzzle and force a redraw to show the updated internal state
+        UIManager:setSuspendRepaints(false)
+        UIManager:setDirty(initial_top, "full")
+        return true
+    end
+    -- Daisy-chain: defer the next dispatch to cleanly unwind the stack
+    UIManager:nextTick(function()
+        UIManager:sendEvent(Event:new("Home"))
+    end)
+    return true
 end
 
 function InputContainer:closeInputDialog()

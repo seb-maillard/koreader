@@ -78,9 +78,7 @@ function ReaderPageMap:_postInit()
         end
     end
     if self.ui.document:hasPageMap() then
-        self.has_pagemap = true
-        self:resetLayout()
-        self.view:registerViewModule("pagemap", self)
+        self:initPageMap()
         self.ui.doc_settings:saveSetting("pagemap_doc_pages", select(3, self:getCurrentPageLabel()))
         if self.ui.document.is_new and self.has_pagemap_document_provided
                 and G_reader_settings:isTrue("pagemap_notify_document_provided") then
@@ -113,6 +111,14 @@ function ReaderPageMap:_postInit()
     end
 end
 
+function ReaderPageMap:initPageMap()
+    if not self.has_pagemap then
+        self.has_pagemap = true
+        self:resetLayout()
+        self.view:registerViewModule("pagemap", self)
+    end
+end
+
 function ReaderPageMap:resetLayout()
     if not self.initialized then
         return
@@ -134,14 +140,8 @@ function ReaderPageMap:resetLayout()
 
     -- Get some metric for label min width
     self.label_face = Font:getFace(self.label_font_face, self.label_font_size)
-    local textw = TextWidget:new{
-        text = " ",
-        face = self.label_face,
-    }
-    self.space_width = textw:getWidth()
-    textw:setText("8")
-    self.number_width = textw:getWidth()
-    textw:free()
+    self.space_width = TextWidget.getTextWidth(" ", self.label_face)
+    self.number_width = TextWidget.getTextWidth("8", self.label_face)
     self.min_label_width = self.space_width * 2 + self.number_width
 end
 
@@ -256,6 +256,7 @@ ReaderPageMap.onChangeViewMode = ReaderPageMap.updateVisibleLabels
 ReaderPageMap.onSetStatusLine = ReaderPageMap.updateVisibleLabels
 
 function ReaderPageMap:onShowPageList()
+    local screen_size = Screen:getSize()
     -- build up item_table
     local cur_page = self.ui.document:getCurrentPage()
     local cur_page_idx = 0
@@ -273,7 +274,7 @@ function ReaderPageMap:onShowPageList()
     end
 
     -- We use the per-page and font-size settings set for the ToC
-    local items_per_page = G_reader_settings:readSetting("toc_items_per_page") or 14
+    local items_per_page = self.ui.toc:getItemsPerPage(screen_size.h > screen_size.w)
     local items_font_size = G_reader_settings:readSetting("toc_items_font_size") or Menu.getItemFontSize(items_per_page)
     local items_with_dots = G_reader_settings:nilOrTrue("toc_items_with_dots")
 
@@ -284,7 +285,7 @@ function ReaderPageMap:onShowPageList()
         is_popout = false,
         items_per_page = items_per_page,
         items_font_size = items_font_size,
-        line_color = require("ffi/blitbuffer").COLOR_WHITE,
+        line_color = Blitbuffer.COLOR_WHITE,
         single_line = true,
         align_baselines = true,
         with_dots = items_with_dots,
@@ -293,8 +294,8 @@ function ReaderPageMap:onShowPageList()
                 ges = "two_finger_swipe",
                 range = Geom:new{
                     x = 0, y = 0,
-                    w = Screen:getWidth(),
-                    h = Screen:getHeight(),
+                    w = screen_size.w,
+                    h = screen_size.h,
                 },
                 direction = BD.flipDirectionIfMirroredUILayout("east")
             }
@@ -302,7 +303,7 @@ function ReaderPageMap:onShowPageList()
     }
 
     self.pagelist_menu = CenterContainer:new{
-        dimen = Screen:getSize(),
+        dimen = screen_size,
         covers_fullscreen = true, -- hint for UIManager:_repaint()
         pl_menu,
     }
@@ -381,6 +382,25 @@ function ReaderPageMap:getPageLabelProps(page_label)
     end
 end
 
+function ReaderPageMap:getPageLastLabel(page)
+    -- for the cases when the page contains several labels
+    -- or top of the page belongs to the previous label
+    local labels_nb = self:getPageLabelProps() -- ensure cache and backup the array sole entry
+    self.page_labels_cache[1] = nil -- hash table only for pairs
+    local last_label_idx = 0
+    local last_label
+    for label, label_prop in pairs(self.page_labels_cache) do
+        if page == label_prop[2] and last_label_idx < label_prop[1] then
+            last_label_idx = label_prop[1]
+            last_label = label
+        end
+    end
+    self.page_labels_cache[1] = labels_nb -- restore
+    -- if there is no label in the page (no cache entry for this page), use page xpointer
+    last_label = last_label or self:getXPointerPageLabel(self.ui.document:getPageXPointer(page), true)
+    return last_label, self.page_labels_cache[last_label][1] -- index
+end
+
 function ReaderPageMap:onDocumentRerendered()
     self.page_labels_cache = nil
 end
@@ -410,6 +430,55 @@ Source (print edition):
         return text
     end
     UIManager:show(InfoMessage:new{ text = text })
+end
+
+function ReaderPageMap:setSyntheticPagesNumber(pages)
+    self:initPageMap()
+    local _start, _end = 501, 3000 -- CPP dialog min, max
+    local _middle, _pages
+    for _ = 1, 12 do
+        _middle = bit.rshift(_start + _end, 1)
+        self.ui.document:buildSyntheticPageMap(_middle)
+        _pages = select(3, self:getCurrentPageLabel())
+        if _pages == pages then
+            break
+        elseif _pages < pages then
+            _end = _middle - 1
+        else
+            _start = _middle + 1
+        end
+    end
+    self:setCharactersPerPage(_middle, _pages)
+end
+
+function ReaderPageMap:setCharactersPerPage(cpp, pages)
+    if not pages then -- from CPP dialog
+        self:initPageMap()
+        self.ui.document:buildSyntheticPageMap(cpp)
+        pages = select(3, self:getCurrentPageLabel())
+    end
+    self.chars_per_synthetic_page = cpp
+    self.page_labels_cache = nil
+    self:updateVisibleLabels()
+    UIManager:setDirty(self.view.dialog, "partial")
+    self.ui.doc_settings:saveSetting("pagemap_chars_per_synthetic_page", cpp)
+    self.ui.doc_settings:saveSetting("pagemap_doc_pages", pages)
+    UIManager:broadcastEvent(Event:new("UsePageLabelsUpdated"))
+end
+
+function ReaderPageMap:setPublisherPageNumbers(parent)
+    UIManager:show(ConfirmBox:new{
+        text = _("Use publisher page numbers?\nThe document will be reloaded."),
+        ok_callback = function()
+            parent:onClose()
+            self.ui.doc_settings:delSetting("pagemap_chars_per_synthetic_page")
+            self.ui.document:invalidateCacheFile()
+            local after_open_callback = function(ui)
+                ui.annotation:setNeedsUpdateFlag()
+            end
+            self.ui:reloadDocument(nil, nil, after_open_callback)
+        end,
+    })
 end
 
 function ReaderPageMap:addToMainMenu(menu_items)
@@ -458,6 +527,31 @@ Since stable page numbers can start anywhere on the screen, you can choose to di
             },
             {
                 text_func = function()
+                    return T(_("Stable pages: %1"), select(3, self:getCurrentPageLabel()) or _("disabled"))
+                end,
+                keep_menu_open = true,
+                callback = function(touchmenu_instance)
+                    UIManager:show(SpinWidget:new{
+                        title_text = _("Stable pages"),
+                        value = select(3, self:getCurrentPageLabel()),
+                        value_min = 1,
+                        value_max = 10000,
+                        value_hold_step = 10,
+                        ok_always_enabled = true,
+                        callback = function(spin)
+                            self:setSyntheticPagesNumber(spin.value)
+                            touchmenu_instance:updateItems()
+                        end,
+                        extra_text = self.has_pagemap_document_provided and self.chars_per_synthetic_page
+                            and _("Use publisher page numbers"),
+                        extra_callback = function(spin)
+                            self:setPublisherPageNumbers(spin)
+                        end,
+                    })
+                end,
+            },
+            {
+                text_func = function()
                     return T(_("Characters per page: %1"), self.chars_per_synthetic_page or _("disabled"))
                 end,
                 keep_menu_open = true,
@@ -470,39 +564,14 @@ Since stable page numbers can start anywhere on the screen, you can choose to di
                         value_hold_step = 20,
                         default_value = self.chars_per_synthetic_page_default,
                         ok_always_enabled = true,
-                        keep_shown_on_apply = true,
                         callback = function(spin)
-                            spin:onClose()
-                            if not self.has_pagemap then
-                                self.has_pagemap = true
-                                self:resetLayout()
-                                self.view:registerViewModule("pagemap", self)
-                            end
-                            self.chars_per_synthetic_page = spin.value
-                            self.page_labels_cache = nil
-                            self.ui.document:buildSyntheticPageMap(spin.value)
-                            self:updateVisibleLabels()
-                            UIManager:setDirty(self.view.dialog, "partial")
-                            self.ui.doc_settings:saveSetting("pagemap_chars_per_synthetic_page", spin.value)
-                            self.ui.doc_settings:saveSetting("pagemap_doc_pages", select(3, self:getCurrentPageLabel()))
-                            UIManager:broadcastEvent(Event:new("UsePageLabelsUpdated"))
+                            self:setCharactersPerPage(spin.value)
                             touchmenu_instance:updateItems()
                         end,
                         extra_text = self.has_pagemap_document_provided and self.chars_per_synthetic_page
                             and _("Use publisher page numbers"),
                         extra_callback = function(spin)
-                            UIManager:show(ConfirmBox:new{
-                                text = _("Use publisher page numbers?\nThe document will be reloaded."),
-                                ok_callback = function()
-                                    spin:onClose()
-                                    self.ui.doc_settings:delSetting("pagemap_chars_per_synthetic_page")
-                                    self.ui.document:invalidateCacheFile()
-                                    local after_open_callback = function(ui)
-                                        ui.annotation:setNeedsUpdateFlag()
-                                    end
-                                    self.ui:reloadDocument(nil, nil, after_open_callback)
-                                end,
-                            })
+                            self:setPublisherPageNumbers(spin)
                         end,
                     })
                 end,

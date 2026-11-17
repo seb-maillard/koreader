@@ -6,13 +6,12 @@ Plugin for setting screen warmth based on the sun position and/or a time schedul
 
 local CheckButton = require("ui/widget/checkbutton")
 local ConfirmBox = require("ui/widget/confirmbox")
-local Device = require("device")
 local DateTimeWidget = require("ui/widget/datetimewidget")
-local DoubleSpinWidget = require("ui/widget/doublespinwidget")
+local Device = require("device")
 local DeviceListener = require("device/devicelistener")
 local Dispatcher = require("dispatcher")
+local DoubleSpinWidget = require("ui/widget/doublespinwidget")
 local Event = require("ui/event")
-local FFIUtil = require("ffi/util")
 local Font = require("ui/font")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
@@ -23,13 +22,13 @@ local SunTime = require("suntime")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local datetime = require("datetime")
 local logger = require("logger")
+local Powerd = Device.powerd
+local Screen = Device.screen
 local _ = require("gettext")
 local C_ = _.pgettext
-local Powerd = Device.powerd
-local T = FFIUtil.template
-local Screen = require("device").screen
-local datetime = require("datetime")
+local T = require("ffi/util").template
 
 local activate_sun = 1
 local activate_schedule = 2
@@ -126,6 +125,12 @@ function AutoWarmth:init()
         end
         i = j
     end
+
+    -- AutoStandby can pause the task scheduler while reading
+    -- (e.g. on Pocketbook Era 700).
+    -- To prevent missing or delayed events we hook into InputEvent
+    -- and check if we need to schedule the next warmth change.
+    UIManager.event_hook:registerWidget("InputEvent", self)
 
     -- schedule recalculation shortly after midnight
     self:scheduleMidnightUpdate()
@@ -481,6 +486,16 @@ function AutoWarmth:toggleFrontlight(now_s)
     self:setFrontlight(sunrise_in_s > 0 or sunset_in_s < 0)
 end
 
+function AutoWarmth:onInputEvent()
+    if self.activate == 0 or #self.sched_warmths == 0 or self.sched_warmth_index > #self.sched_warmths then
+        return
+    end
+
+    if SunTime:getTimeInSec() >= self.sched_times_s[self.sched_warmth_index] then
+        self:scheduleNextWarmthChange(false)
+    end
+end
+
 -- schedules the next warmth change
 -- search_pos ... start searching from that index
 -- from_resume ... true if first call after resume
@@ -547,7 +562,7 @@ end
 
 -- Set warmth and schedule the next warmth change
 function AutoWarmth:setWarmth(val, force_warmth)
-    -- A value > 100 means to set night mode and set warmth to maximum.
+    -- A value > 100 means to set night mode.
     -- We use an offset of 1000 to "flag", that night mode is on.
     if val then
         if self.control_nightmode then
@@ -556,7 +571,8 @@ function AutoWarmth:setWarmth(val, force_warmth)
         end
 
         if self.control_warmth and Device:hasNaturalLight() then
-            val = math.min(val, 100) -- "mask" night mode
+            -- "mask" night mode (stored as an offset of 1000)
+            val = val > 100 and val - 1000 or val
             Powerd:setWarmth(val, force_warmth)
             UIManager:broadcastEvent(Event:new(self.event_auto_warmth_activated))
         end
@@ -1029,7 +1045,7 @@ function AutoWarmth:getWarmthMenu()
                         if self.warmth[num] <= 100 then
                             return T(_("%1: %2 %"), text, self.warmth[num])
                         else
-                            return T(_("%1: 100 % + ☾"), text)
+                            return T(_("%1: %2 % + ☾"), text, math.max(self.warmth[num] - 1000, 0))
                         end
                     else
                         if self.warmth[num] <= 100 then
@@ -1215,23 +1231,8 @@ function AutoWarmth:showTimesInfo(title, location, activator, request_easy)
     -- t .. times
     -- num .. index in times
     local function info_line(indent, text, time, num, face, easy)
-        -- get width of space
-        local unit = " "
-        local tmp = TextWidget:new{
-            text = unit,
-            face = face,
-        }
-        local space_w = tmp:getSize().w
-
-        -- get width of text
-        unit = text
-        tmp = TextWidget:new{
-            text = unit,
-            face = face,
-        }
-        local text_w = tmp:getSize().w
-        tmp:free()
-
+        local space_w = TextWidget.getTextWidth(" ", face)
+        local text_w = TextWidget.getTextWidth(text, face)
         -- width of text in spaces
         local str_len = math.floor(text_w / space_w + 0.5)
 

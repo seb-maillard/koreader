@@ -425,6 +425,11 @@ function MenuItem:init()
     self._underline_container = UnderlineContainer:new{
         color = self.line_color,
         linesize = self.linesize,
+        focus_linesize = Size.line.focus_row,
+        -- With text_bgcolor the row has a coloured frame behind its text only, so no
+        -- single colour erases the focus bar over the whole width; without background
+        -- set, such a row falls back to the stock full repaint.
+        background = not self.text_bgcolor and Blitbuffer.COLOR_WHITE or nil,
         vertical_align = "center",
         padding = 0,
         dimen = Geom:new{
@@ -466,12 +471,7 @@ function MenuItem:getDotsText(face)
     if not _dots_cached_info or _dots_cached_info.screen_width ~= screen_w
                     or _dots_cached_info.face ~= face then
         local unit = "."
-        local tmp = TextWidget:new{
-            text = unit,
-            face = face,
-        }
-        local unit_w = tmp:getSize().w
-        tmp:free()
+        local unit_w = TextWidget.getTextWidth(unit, face)
         -- (We assume/expect no kerning will happen between consecutive units)
         local nb_units = math.ceil(screen_w / unit_w)
         local min_width = unit_w * 3 -- have it not shown if smaller than this
@@ -486,19 +486,23 @@ function MenuItem:getDotsText(face)
     return _dots_cached_info.text, _dots_cached_info.min_width
 end
 
+function MenuItem:getFocusIndicatorRegion()
+    return self._underline_container and self._underline_container:getFocusIndicatorRegion()
+end
+
+function MenuItem:repaintFocusIndicator(bb)
+    return self._underline_container and self._underline_container:repaintFocusIndicator(bb)
+end
+
 function MenuItem:onFocus()
     self._underline_container.color = Blitbuffer.COLOR_BLACK
-    -- NOTE: Medium is really, really, really thin; so we'd ideally swap to something thicker...
-    --       Unfortunately, this affects vertical text positioning,
-    --       leading to an unsightly refresh of the item :/.
-    --self._underline_container.linesize = Size.line.thick
+    self._underline_container.focused = true
     return true
 end
 
 function MenuItem:onUnfocus()
     self._underline_container.color = self.line_color
-    -- See above for reasoning.
-    --self._underline_container.linesize = self.linesize
+    self._underline_container.focused = false
     return true
 end
 
@@ -1261,11 +1265,7 @@ function Menu:setupItemHeights()
     }:getSize().h
     local infont_size = self.items_mandatory_font_size or (self.font_size - 4)
     local infont_face = Font:getFace("infont", infont_size)
-    local infont_char_width = TextWidget:new{
-        text = "0",
-        face = infont_face,
-        bold = true,
-    }:getSize().w
+    local infont_char_width = TextWidget.getTextWidth("0", infont_face, true) -- bold
     local available_width = self.inner_dimen.w
     if self.is_enable_shortcut then
         available_width = available_width - line_height - Size.span.horizontal_default
@@ -1279,13 +1279,9 @@ function Menu:setupItemHeights()
         -- exact item height can be calculated by building the TextBoxWidget for item text,
         -- but it is slow, so estimate the number of lines by building the TextWidget
         -- empirical 8% is added to consider unjustified unhyphenated multilines text layout
-        local item_text_width = TextWidget:new{
-            text = item.text,
-            face = face,
-            bold = item.bold,
-        }:getSize().w * 1.08
+        local item_text_w = TextWidget.getTextWidth(item.text, face, item.bold) * 1.08
         local item_available_width = available_width - infont_char_width * (item.mandatory and #tostring(item.mandatory) or 0)
-        local lines_nb = math.min(math.ceil(item_text_width / item_available_width), self.items_max_lines)
+        local lines_nb = math.min(math.ceil(item_text_w / item_available_width), self.items_max_lines)
         item.height = lines_nb * line_height + 2 * Size.span.vertical_default + self.linesize
         item.shortcut_icon_width = line_height -- letter shortcuts of fixed size (1 line)
 
@@ -1447,6 +1443,19 @@ function Menu:onShowingReader()
 end
 Menu.onSetupShowReader = Menu.onShowingReader
 
+-- Although Menu inherits this method from InputContainer and it is pretty
+-- much identical to that one, we need to override it here due to the
+-- complexity of the module (multiple FocusManagers and InputContainers).
+function Menu:onHome()
+    UIManager:setSuspendRepaints(true)
+    self:onClose()
+    local Event = require("ui/event")
+    UIManager:nextTick(function()
+        UIManager:sendEvent(Event:new("Home"))
+    end)
+    return true
+end
+
 function Menu:onCloseWidget()
     --- @fixme
     -- we cannot refresh regionally using the dimen field
@@ -1592,24 +1601,13 @@ function Menu.getMenuText(item)
     else
         text = item.text
     end
+    if item.text_star_func and item.text_star_func() then
+        text = text .. "   ★"
+    end
     if item.sub_item_table ~= nil or item.sub_item_table_func then
         text = string.format(sub_item_format, text)
     end
     return text
-end
-
-function Menu.itemTableFromTouchMenu(t)
-    local item_t = {}
-    for k, v in ffiUtil.orderedPairs(t) do
-        local item = { text = k }
-        if v.callback then
-            item.callback = v.callback
-        else
-            item.sub_item_table = v
-        end
-        table.insert(item_t, item)
-    end
-    return item_t
 end
 
 return Menu

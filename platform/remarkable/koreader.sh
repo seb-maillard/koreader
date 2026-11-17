@@ -29,6 +29,14 @@ fi
 
 fbink_wrapped() {
     if [ -n "${KO_USE_QTFB}" ]; then
+        case "${MACHINE_TYPE}" in
+            "reMarkable Ferrari" | "reMarkable Chiappa")
+                # Our QTFB framebuffer is 32bpp RGBA8888 on the color models,
+                # but the qtfb-shim can only present a 16bpp RGB565 one to
+                # FBInk, and AppLoad refuses mismatched formats on a key.
+                return 0
+                ;;
+        esac
         LD_PRELOAD="/home/root/shims/qtfb-shim.so" \
             QTFB_SHIM_MODEL="false" \
             QTFB_SHIM_INPUT_MODE="NATIVE" \
@@ -68,7 +76,11 @@ ko_update_check() {
         export FBINK_NAMED_PIPE="/tmp/koreader.fbink"
         rm -f "${FBINK_NAMED_PIPE}"
         FBINK_PID="$(fbink_wrapped --daemon 1 %KOREADER% -q -y -6 -P 0)"
-        (cd "${UNPACK_DIR}" && "${KOREADER_DIR}/unpack" -X "${NEWUPDATE}" >"${FBINK_NAMED_PIPE}")
+        # Open a handle to the fifo ourselves too: this prevent writes to the
+        # fifo from hanging if fbink crashed (even with no one reading, its
+        # buffer should still be big enough to never be full either).
+        exec 3<>"${FBINK_NAMED_PIPE}"
+        (cd "${UNPACK_DIR}" && "${KOREADER_DIR}/unpack" -X "${NEWUPDATE}" >&3)
         fail=$?
         kill -TERM "${FBINK_PID}"
         # Cleanup behind us...
@@ -83,6 +95,9 @@ ko_update_check() {
             fbink_wrapped -q -y -5 -pm "KOReader may fail to function properly!"
         fi
         rm -f /tmp/package.index "${NEWUPDATE}" # always purge newupdate to prevent update loops
+        # Fifo cleanup: close our handle, and unlink the path too (in case fbink crashed).
+        exec 3>&-
+        rm -f "${FBINK_NAMED_PIPE}"
         unset FBINK_NAMED_PIPE FBINK_PID
         # Ensure everything is flushed to disk before we restart. This *will* stall for a while on slow storage!
         busybox sync

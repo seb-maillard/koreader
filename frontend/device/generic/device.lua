@@ -89,6 +89,8 @@ local Device = {
     hasBattery = yes,
     hasAuxBattery = no,
     hasKeyboard = no,
+    supportsExternalKeyboard = no,
+    hasOTGManagement = no,
     hasKeys = no,
     hasScreenKB = no, -- in practice only some Kindles
     hasSymKey = no, -- in practice only some Kindles
@@ -145,6 +147,9 @@ local Device = {
     startTextInput = function() end,
     stopTextInput = function() end,
 
+    getOTGRole = function() end,
+    setOTGRole = function(role) end,
+
     -- use these only as a last resort. We should abstract the functionality
     -- and have device dependent implementations in the corresponding
     -- device/<devicetype>/device.lua file
@@ -155,7 +160,7 @@ local Device = {
     isKobo = no,
     isPocketBook = no,
     isRemarkable = no,
-    isSonyPRSTUX = no,
+    isBookeen = no,
     isSDL = no,
     isEmulator = no,
     isDesktop = no,
@@ -315,6 +320,10 @@ function Device:init()
         end
     end
 
+    if self:hasDPad() and G_reader_settings:isTrue("input_use_dpad_as_action_keys") then
+        self:setUseDPadAsActionKeys(true)
+    end
+
     if self:hasGSensor() then
         -- Setup our standard gyro event handler (EV_MSC:MSC_GYRO)
         if G_reader_settings:nilOrFalse("input_ignore_gsensor") then
@@ -374,6 +383,12 @@ function Device:init()
     if not self:hasWifiToggle() then
         self.hasSeamlessWifiToggle = no
     end
+end
+
+-- True if the active input layer emits TextInput events for physical keys.
+-- InputText then defers insertion to onTextInput instead of using the key name.
+function Device:hasKeyboardTextInput()
+    return self.input.hw_text_layout ~= nil
 end
 
 function Device:setScreenDPI(dpi_override)
@@ -652,6 +667,11 @@ function Device:restoreKeyRepeat() end
 --       opting instead for a hard-coded one (as we can't guarantee that key repeat is actually setup properly or at all).
 -- Device specific method to toggle key repeat
 function Device:toggleKeyRepeat(toggle) end
+
+function Device:setUseDPadAsActionKeys(bool)
+    if bool == nil then bool = false end
+    self.useDPadAsActionKeys = function() return bool end
+end
 
 --[[
 prepare for application shutdown

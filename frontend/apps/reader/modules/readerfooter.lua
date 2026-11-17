@@ -241,55 +241,66 @@ footerTextGeneratorMap = {
         end
     end,
     page_progress = function(footer)
-        if footer.ui.pagemap and footer.ui.pagemap:wantsPageLabels() then
-            -- (Page labels might not be numbers)
-            return ("%s / %s"):format(footer.ui.pagemap:getCurrentPageLabel(true),
-                                      footer.ui.pagemap:getLastPageLabel(true))
-        elseif footer.ui.document:hasHiddenFlows() then
-            -- i.e., if we are hiding non-linear fragments and there's anything to hide,
+        local page_label = footer.ui.pagemap and footer.ui.pagemap:wantsPageLabels()
+            and footer.ui.pagemap:getCurrentPageLabel(true)
+        if footer.ui.document:hasHiddenFlows() then
             local flow = footer.ui.document:getPageFlow(footer.pageno)
             local page = footer.ui.document:getPageNumberInFlow(footer.pageno)
             local pages = footer.ui.document:getTotalPagesInFlow(flow)
             if flow == 0 then
+                if page_label then
+                    local last_page = footer.ui.document:getLastLinearPage()
+                    local last_page_label = footer.ui.pagemap:getPageLastLabel(last_page)
+                    return ("{%s / %s} %d // %d"):format(page_label, last_page_label, page, pages)
+                end
                 return ("%d // %d"):format(page, pages)
             else
+                if page_label then
+                    local first_page = footer.ui.document:getFirstPageInFlow(flow)
+                    local last_page_label = footer.ui.pagemap:getPageLastLabel(first_page + pages - 1)
+                    return ("{%s / %s} [%d / %d]%d"):format(page_label, last_page_label, page, pages, flow)
+                end
                 return ("[%d / %d]%d"):format(page, pages, flow)
             end
         else
+            if page_label then
+                return ("%d / %d"):format(page_label, footer.ui.pagemap:getLastPageLabel(true))
+            end
             return ("%d / %d"):format(footer.pageno, footer.pages)
         end
     end,
     pages_left_book = function(footer)
         local symbol_type = footer.settings.item_prefix
         local prefix = symbol_prefix[symbol_type].pages_left_book
-        if footer.ui.pagemap and footer.ui.pagemap:wantsPageLabels() then
-            -- (Page labels might not be numbers)
-            local label, idx, count = footer.ui.pagemap:getCurrentPageLabel(false) -- luacheck: no unused
-            local remaining = count - idx
-            if footer.settings.pages_left_includes_current_page then
-                remaining = remaining + 1
-            end
-            return ("%s %s / %s"):format(prefix, remaining, footer.ui.pagemap:getLastPageLabel(true))
-        elseif footer.ui.document:hasHiddenFlows() then
-            -- i.e., if we are hiding non-linear fragments and there's anything to hide,
+        local curr = footer.settings.pages_left_includes_current_page and 1 or 0
+        if footer.ui.document:hasHiddenFlows() then
             local flow = footer.ui.document:getPageFlow(footer.pageno)
             local page = footer.ui.document:getPageNumberInFlow(footer.pageno)
             local pages = footer.ui.document:getTotalPagesInFlow(flow)
-            local remaining = pages - page
-            if footer.settings.pages_left_includes_current_page then
-                remaining = remaining + 1
-            end
+            local page_label_idx = footer.ui.pagemap and footer.ui.pagemap:wantsPageLabels()
+                and select(2, footer.ui.pagemap:getCurrentPageLabel())
             if flow == 0 then
-                return ("%s %d // %d"):format(prefix, remaining, pages)
+                if page_label_idx then
+                    local last_page = footer.ui.document:getLastLinearPage()
+                    local _, last_page_label_idx = footer.ui.pagemap:getPageLastLabel(last_page)
+                    return ("%s {%d / %d}"):format(prefix, last_page_label_idx - page_label_idx + curr, last_page_label_idx)
+                end
+                return ("%s %d // %d"):format(prefix, pages - page + curr, pages)
             else
-                return ("%s [%d / %d]%d"):format(prefix, remaining, pages, flow)
+                if page_label_idx then
+                    local first_page = footer.ui.document:getFirstPageInFlow(flow)
+                    local _, last_page_label_idx = footer.ui.pagemap:getPageLastLabel(first_page + pages - 1)
+                    return ("%s {[%d / %d]%d}"):format(prefix, last_page_label_idx - page_label_idx + curr, last_page_label_idx, flow)
+                end
+                return ("%s [%d / %d]%d"):format(prefix, pages - page + curr, pages, flow)
             end
         else
-            local remaining = footer.pages - footer.pageno
-            if footer.settings.pages_left_includes_current_page then
-                remaining = remaining + 1
+            if footer.ui.pagemap and footer.ui.pagemap:wantsPageLabels() then
+                local _, idx, count = footer.ui.pagemap:getCurrentPageLabel()
+                return ("%s {%d / %s}"):format(prefix, count - idx + curr, footer.ui.pagemap:getLastPageLabel(true))
+            else
+                return ("%s %d / %d"):format(prefix, footer.pages - footer.pageno + curr, footer.pages)
             end
-            return ("%s %d / %d"):format(prefix, remaining, footer.pages)
         end
     end,
     pages_left = function(footer)
@@ -488,6 +499,7 @@ ReaderFooter.default_settings = {
     text_font_size = 14, -- unscaled_size_check: ignore
     text_font_bold = false,
     text_font_face = "./fonts/noto/NotoSans-Regular.ttf",
+    text_font_face_index = 0,
     container_height = G_defaults:readSetting("DMINIBAR_CONTAINER_HEIGHT"),
     container_bottom_padding = 1, -- unscaled_size_check: ignore
     progress_margin_width = Device:isAndroid() and Screen:scaleByDPI(16) or 10, -- android: guidelines for rounded corner margins
@@ -515,6 +527,7 @@ ReaderFooter.default_settings = {
 
 function ReaderFooter:init()
     self.settings = G_reader_settings:readSetting("footer", self.default_settings)
+    self.settings.text_font_face_index = self.settings.text_font_face_index or self.default_settings.text_font_face_index
 
     self.additional_footer_content = {} -- array, where additional header content can be inserted.
 
@@ -556,8 +569,9 @@ function ReaderFooter:init()
 
     if not FontChooser.isFontRegistered(self.settings.text_font_face) then
         self.settings.text_font_face = self.default_settings.text_font_face
+        self.settings.text_font_face_index = self.default_settings.text_font_face_index
     end
-    self.footer_text_face = Font:getFace(self.settings.text_font_face, self.settings.text_font_size)
+    self.footer_text_face = Font:getFace(self.settings.text_font_face, self.settings.text_font_size, self.settings.text_font_face_index)
     self.footer_text = TextWidget:new{
         text = "",
         face = self.footer_text_face,
@@ -690,8 +704,10 @@ function ReaderFooter:set_custom_text(touchmenu_instance)
                     end,
                 },
                 {
-                    text = _("Info"),
-                    callback = self.ui.bookinfo.expandString,
+                    text = _("Patterns"),
+                    callback = function()
+                        self.ui.bookinfo.chooseExpandStringPattern(text_dialog, self.ui)
+                    end,
                 },
                 {
                     text = _("Set"),
@@ -765,12 +781,14 @@ function ReaderFooter:updateFooterContainer()
         }
     end
 
-    if self.settings.align == "left" then
+    -- always center footer text with dynamic filler
+    local no_dynamic_filler = not (self.settings.dynamic_filler or self.settings.dynamic_filler2)
+    if no_dynamic_filler and self.settings.align == "left" then
         self.footer_container = LeftContainer:new{
             dimen = Geom:new{ w = 0, h = self.height },
             self.horizontal_group
         }
-    elseif self.settings.align == "right" then
+    elseif no_dynamic_filler and self.settings.align == "right" then
         self.footer_container = RightContainer:new{
             dimen = Geom:new{ w = 0, h = self.height },
             self.horizontal_group
@@ -1540,9 +1558,7 @@ With this feature enabled, the current page is factored in, resulting in the cou
             },
             {
                 text_func = function()
-                    local text = self.settings.text_font_face == self.default_settings.text_font_face
-                        and _("default") or FontChooser.getFontNameText(self.settings.text_font_face)
-                    text = text .. ", " .. self.settings.text_font_size
+                    local text = self:getFontNameText() .. ", " .. self.settings.text_font_size
                     if self.settings.text_font_bold then
                         text = text .. ", " .. _("bold")
                     end
@@ -1573,20 +1589,22 @@ With this feature enabled, the current page is factored in, resulting in the cou
                     },
                     {
                         text_func = function()
-                            local text = self.settings.text_font_face == self.default_settings.text_font_face
-                                and _("default") or FontChooser.getFontNameText(self.settings.text_font_face)
-                            return T(_("Item font: %1"), text)
+                            return T(_("Item font: %1"), self:getFontNameText())
                         end,
                         keep_menu_open = true,
                         callback = function(touchmenu_instance)
                             UIManager:show(FontChooser:new{
                                 title = _("Item font"),
                                 font_file = self.settings.text_font_face,
+                                font_file_index = self.settings.text_font_face_index,
                                 default_font_file = self.default_settings.text_font_face,
+                                default_font_file_index = self.default_settings.text_font_face_index,
                                 keep_shown_on_apply = true,
-                                callback = function(file)
-                                    if self.settings.text_font_face ~= file then
+                                callback = function(file, file_index)
+                                    if self.settings.text_font_face ~= file
+                                            or self.settings.text_font_face_index ~= file_index then
                                         self.settings.text_font_face = file
+                                        self.settings.text_font_face_index = file_index
                                         self:updateFooterFont()
                                         self:refreshFooter(true, true)
                                         touchmenu_instance:updateItems()
@@ -1595,8 +1613,10 @@ With this feature enabled, the current page is factored in, resulting in the cou
                             })
                         end,
                         hold_callback = function(touchmenu_instance)
-                            if self.settings.text_font_face ~= self.default_settings.text_font_face then
+                            if self.settings.text_font_face ~= self.default_settings.text_font_face
+                                    or self.settings.text_font_face_index ~= self.default_settings.text_font_face_index then
                                 self.settings.text_font_face = self.default_settings.text_font_face
+                                self.settings.text_font_face_index = self.default_settings.text_font_face_index
                                 self:updateFooterFont()
                                 self:refreshFooter(true, true)
                                 touchmenu_instance:updateItems()
@@ -1980,6 +2000,13 @@ function ReaderFooter:genAlignmentMenuItems(value)
     }
 end
 
+function ReaderFooter:getFontNameText()
+    return self.settings.text_font_face == self.default_settings.text_font_face
+        and self.settings.text_font_face_index == self.default_settings.text_font_face_index
+        and _("default")
+        or FontChooser.getFontNameText(self.settings.text_font_face, self.settings.text_font_face_index)
+end
+
 function ReaderFooter:buildPreset()
     local mode = self.mode
     if mode == self.mode_list.off and not self.settings.disable_progress_bar then
@@ -1996,6 +2023,7 @@ end
 function ReaderFooter:loadPreset(preset)
     local old_text_font_size = self.settings.text_font_size
     local old_text_font_face = self.settings.text_font_face
+    local old_text_font_face_index = self.settings.text_font_face_index
     local old_text_font_bold = self.settings.text_font_bold
     G_reader_settings:saveSetting("footer", util.tableDeepCopy(preset.footer))
     G_reader_settings:saveSetting("reader_footer_mode", preset.reader_footer_mode)
@@ -2013,7 +2041,9 @@ function ReaderFooter:loadPreset(preset)
     end
     self:applyFooterMode(preset.reader_footer_mode)
     self:updateFooterTextGenerator()
-    if old_text_font_size ~= self.settings.text_font_size or old_text_font_face ~= self.settings.text_font_face
+    if old_text_font_size ~= self.settings.text_font_size
+            or old_text_font_face ~= self.settings.text_font_face
+            or old_text_font_face_index ~= self.settings.text_font_face_index
             or old_text_font_bold ~= self.settings.text_font_bold then
         self:updateFooterFont()
     else
@@ -2137,8 +2167,8 @@ function ReaderFooter:insertDynamicFillers(info, filler1_idx, filler2_idx)
 
     local filler_space = " "
     self.filler_space_width = self.filler_space_width or self:getTextWidth(filler_space)
-    local margin = (self.settings.disable_progress_bar or self.settings.align == "center")
-        and self.horizontal_margin or Screen:scaleBySize(self.settings.progress_margin_width)
+    local margin = self.settings.disable_progress_bar and self.horizontal_margin
+        or Screen:scaleBySize(self.settings.progress_margin_width)
     local max_width = math.floor(self._saved_screen_width - 2 * margin)
     local text_width = self:getTextWidth(table.concat(info))
 
@@ -2191,14 +2221,7 @@ function ReaderFooter:insertDynamicFillers(info, filler1_idx, filler2_idx)
 end
 
 function ReaderFooter:getTextWidth(text)
-    local tmp = TextWidget:new{
-        text = text,
-        face = self.footer_text_face,
-        bold = self.settings.text_font_bold,
-    }
-    local text_width = tmp:getSize().w
-    tmp:free()
-    return text_width
+    return TextWidget.getTextWidth(text, self.footer_text_face, self.settings.text_font_bold)
 end
 
 function ReaderFooter:setTocMarkers(reset)
@@ -2227,7 +2250,7 @@ function ReaderFooter:setTocMarkers(reset)
             if self.ui.toc then
                 self.progress_bar.ticks = self.ui.toc:getTocTicksFlattened()
             end
-            if self.view.view_mode == "page" then
+            if self.ui.paging or self.view.view_mode == "page" then
                 self.progress_bar.last = self.pages
             else
                 -- in scroll mode, convert pages to positions
@@ -2266,8 +2289,9 @@ function ReaderFooter:updateFooterFont()
     self.filler_space_width = nil
     if not FontChooser.isFontRegistered(self.settings.text_font_face) then
         self.settings.text_font_face = self.default_settings.text_font_face
+        self.settings.text_font_face_index = self.default_settings.text_font_face_index
     end
-    self.footer_text_face = Font:getFace(self.settings.text_font_face, self.settings.text_font_size)
+    self.footer_text_face = Font:getFace(self.settings.text_font_face, self.settings.text_font_size, self.settings.text_font_face_index)
     self.footer_text:free()
     self.footer_text = TextWidget:new{
         text = self.footer_text.text,
@@ -2394,7 +2418,6 @@ end
 -- Note: no need for :onDocumentRerendered(), ReaderToc will catch "DocumentRerendered"
 -- and will then emit a "TocReset" after the new ToC is made.
 function ReaderFooter:onTocReset()
-    self.pages = self.ui.document:getPageCount()
     self:setTocMarkers(true)
     self:onUpdateFooter()
 end

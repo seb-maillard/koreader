@@ -96,6 +96,7 @@ function FileChooser:show_file(filename, fullpath)
 end
 
 function FileChooser:init()
+    self.is_fm = self.name == "filemanager"
     self.path_items = {}
     if lfs.attributes(self.path, "mode") ~= "directory" then
         self.path = filemanagerutil.getHomeFolder()
@@ -106,8 +107,8 @@ end
 
 function FileChooser:getList(path, collate)
     local dirs, files = {}, {}
-    self:getPathList(path, collate, dirs, files)
-    return dirs, files
+    local readable = self:getPathList(path, collate, dirs, files)
+    return dirs, files, readable
 end
 
 function FileChooser:getPathList(path, collate, dirs, files)
@@ -122,7 +123,7 @@ function FileChooser:getPathList(path, collate, dirs, files)
                 local item = true
                 if attributes.mode == "directory" and f ~= "." and f ~= ".."
                         and self:show_dir(f) then
-                    if FileChooser.show_flat_view then
+                    if FileChooser.show_flat_view and self.is_fm then
                         self:getPathList(fullpath, collate, dirs, files)
                     else
                         if collate then -- when collate == nil count only to display in folder mandatory
@@ -141,10 +142,8 @@ function FileChooser:getPathList(path, collate, dirs, files)
             end
         end
     else -- error, probably "permission denied"
-        if FileChooser.show_flat_view then return end
+        if FileChooser.show_flat_view and self.is_fm then return false end
         if unreadable_dir_content[path] then
-            -- Add this dummy item that will be replaced with a message by genItemTable()
-            table.insert(dirs, self:getListItem(path, "./.", path, {}))
             -- If we knew about some content (if we had come up from them
             -- to this directory), have them shown
             for k, v in pairs(unreadable_dir_content[path]) do
@@ -156,6 +155,7 @@ function FileChooser:getPathList(path, collate, dirs, files)
             end
         end
     end
+    return ok
 end
 
 function FileChooser:getListItem(dirpath, f, fullpath, attributes, collate)
@@ -186,17 +186,13 @@ function FileChooser:getListItem(dirpath, f, fullpath, attributes, collate)
         item.dim = self.ui and self.ui.selected_files and self.ui.selected_files[item.path]
         item.mandatory = self:getMenuItemMandatory(item, collate)
     else -- folder
-        if item.text == "./." then -- added as content of an unreadable directory
-            item.text = _("Current folder not readable. Some content may not be shown.")
-        else
-            item.text = item.text.."/"
-            item.bidi_wrap_func = BD.directory
-            if collate.can_collate_mixed and collate.item_func ~= nil then -- used by user plugin/patch, don't remove
-                collate.item_func(item, self.ui)
-            end
-            if dirpath then -- file browser or PathChooser
-                item.mandatory = self:getMenuItemMandatory(item)
-            end
+        item.text = item.text.."/"
+        item.bidi_wrap_func = BD.directory
+        if collate.can_collate_mixed and collate.item_func ~= nil then -- used by user plugin/patch, don't remove
+            collate.item_func(item, self.ui)
+        end
+        if dirpath then -- file browser or PathChooser
+            item.mandatory = self:getMenuItemMandatory(item)
         end
     end
     return item
@@ -236,8 +232,8 @@ end
 
 function FileChooser:genItemTableFromPath(path)
     local collate = self:getCollate()
-    local dirs, files = self:getList(path, collate)
-    return self:genItemTable(dirs, files, path)
+    local dirs, files, readable = self:getList(path, collate)
+    return self:genItemTable(dirs, files, path), readable
 end
 
 function FileChooser:genItemTable(dirs, files, path)
@@ -263,7 +259,7 @@ function FileChooser:genItemTable(dirs, files, path)
 
     if path then -- file browser or PathChooser
         if path ~= "/"
-            and not (G_reader_settings:isFalse("show_parent_folder") and self.name == "filemanager")
+            and not (G_reader_settings:isFalse("show_parent_folder") and self.is_fm)
             and not (G_reader_settings:isTrue("lock_home_folder") and path == G_reader_settings:readSetting("home_dir"))
         then
             table.insert(item_table, 1, {
@@ -325,7 +321,7 @@ function FileChooser:updateItems(select_number, no_recalculate_dimen)
 end
 
 function FileChooser:refreshPath()
-    local _, folder_name = util.splitFilePathName(self.path)
+    local folder_name = select(2, util.splitFilePathName(self.path))
     Screen:setWindowTitle(folder_name)
 
     local itemmatch
@@ -333,13 +329,29 @@ function FileChooser:refreshPath()
         itemmatch = {path = self.focused_path}
         self.focused_path = nil
     end
-    local subtitle = self.name ~= "filemanager" -- filemanager does it by itself
+    local subtitle = not self.is_fm -- filemanager does it by itself
         and (self.ui.folder_shortcuts:getShortcutFullName(self.path) or BD.directory(filemanagerutil.abbreviate(self.path)))
-    self:switchItemTable(nil, self:genItemTableFromPath(self.path), self.path_items[self.path], itemmatch, subtitle)
+    local items, readable = self:genItemTableFromPath(self.path)
+    self:switchItemTable(nil, items, self.path_items[self.path], itemmatch, subtitle)
+    if readable then
+        self.unreadable_path_warned = nil
+    elseif self.unreadable_path_warned ~= self.path then
+        self.unreadable_path_warned = self.path
+        local InfoMessage = require("ui/widget/infomessage")
+        UIManager:show(InfoMessage:new{
+            text = _("Current folder not readable. Some content may not be shown."),
+            icon = "notice-warning",
+        })
+    end
 end
 
 function FileChooser:changeToPath(path, focused_path)
-    path = ffiUtil.realpath(path)
+    local real_path = ffiUtil.realpath(path)
+    while real_path == nil do -- go up
+        path = path:match("(.*)/.*")
+        real_path = ffiUtil.realpath(path ~= "" and path or "/")
+    end
+    path = real_path
     self.path = path
 
     if focused_path then
@@ -359,10 +371,26 @@ function FileChooser:changeToPath(path, focused_path)
         end
     end
 
-    self:refreshPath()
-    if self.name == "filemanager" then
+    if self.is_fm then
         self.ui:handleEvent(Event:new("PathChanged", path))
     end
+    self:refreshPath()
+end
+
+function FileChooser:onHome()
+    local FileManager = require("apps/filemanager/filemanager")
+    UIManager:setSuspendRepaints(true)
+    if FileManager.instance then
+        -- FileChooser is a Booklist (which in turn is a Menu), we need
+        -- to redirect Home calls otherwise we will unalive ourselves,
+        -- taking the whole application down with us.
+        return FileManager.instance:onHome()
+    end
+    self:onClose()
+    UIManager:nextTick(function()
+        UIManager:sendEvent(Event:new("Home"))
+    end)
+    return true
 end
 
 function FileChooser:goHome()

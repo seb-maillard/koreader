@@ -690,9 +690,7 @@ local BookMapWidget = FocusManager:extend{
 }
 
 function BookMapWidget:init()
-    -- On touch devices (with keys), we don't really need to navigate focus with keys,
-    -- so we should avoid allocating memory to huge data structures.
-    self.enable_focus_navigation = not Device:isTouchDevice() and Device:hasDPad() and Device:useDPadAsActionKeys()
+    self.enable_focus_navigation = Device:hasDPad() and Device:useDPadAsActionKeys()
 
     if self.ui.view:shouldInvertBiDiLayoutMirroring() then
         BD.invert()
@@ -797,12 +795,7 @@ function BookMapWidget:init()
     self.toc_span_font_name = "infofont"
     self.toc_span_font_size = 14
     self.toc_span_face = Font:getFace(self.toc_span_font_name, self.toc_span_font_size)
-    local test_w = TextWidget:new{
-        text = "z",
-        face = self.toc_span_face,
-    }
-    self.span_height = test_w:getSize().h + BookMapRow.toc_span_border
-    test_w:free()
+    self.span_height = TextWidget.getTextHeight("z", self.toc_span_face) + BookMapRow.toc_span_border
 
     -- Reference font size for flat TOC items, as set (or default) in ReaderToc
     self.reader_toc_font_size = G_reader_settings:readSetting("toc_items_font_size")
@@ -884,10 +877,10 @@ end
 
 function BookMapWidget:registerKeyEvents()
     if Device:hasKeys() then
-        if Device:isTouchDevice() then
+        if Device:hasDPad() and not Device:useDPadAsActionKeys() then
             -- Remove key handling by FocusManager (there is no ordering/priority
             -- handling for key_events, unlike with touch zones)
-            self.key_events = {}
+            self:releaseFocusKeys("FocusLeft", "FocusRight", "FocusUp", "FocusDown", "Press")
             self.key_events.ScrollRowUp = { { "Up" } }
             self.key_events.ScrollRowDown = { { "Down" } }
         elseif Device:hasScreenKB() or Device:hasKeyboard() then
@@ -1391,6 +1384,7 @@ function BookMapWidget:onShowBookMapMenu()
         {
             {
                 text = _("Chapter levels"),
+                focusable = false,
                 callback = function() end,
                 align = "left",
             },
@@ -1418,6 +1412,7 @@ function BookMapWidget:onShowBookMapMenu()
         not self.overview_mode and {
             {
                 text = _("Page-slot width"),
+                focusable = false,
                 callback = function() end,
                 align = "left",
                 -- Below, minus increases page per row and plus decreases it.
@@ -1457,6 +1452,7 @@ function BookMapWidget:onShowBookMapMenu()
         {
             {
                 text = _("10-page markers"),
+                focusable = false,
                 callback = function() end,
                 align = "left",
             },

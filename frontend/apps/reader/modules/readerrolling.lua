@@ -124,7 +124,10 @@ function ReaderRolling:registerKeyEvents()
         if G_reader_settings:isTrue("left_right_keys_turn_pages") then
             self.key_events.GotoNextView = { { { "LPgFwd", next_key } }, event = "GotoViewRel", args = 1, }
             self.key_events.GotoPrevView = { { { "LPgBack", prev_key } }, event = "GotoViewRel", args = -1, }
-        elseif G_reader_settings:nilOrFalse("left_right_keys_turn_pages") then
+            -- clear chapter bindings in case we were called from onRegisterDPadEvents
+            self.key_events.GotoNextChapter = nil
+            self.key_events.GotoPrevChapter = nil
+        else
             self.key_events.GotoNextChapter = { { next_key }, event = "GotoNextChapter", args = 1, }
             self.key_events.GotoPrevChapter = { { prev_key }, event = "GotoPrevChapter", args = -1, }
             self.key_events.GotoNextView = { { "LPgFwd" }, event = "GotoViewRel", args = 1, }
@@ -155,6 +158,7 @@ function ReaderRolling:registerKeyEvents()
 end
 
 ReaderRolling.onPhysicalKeyboardConnected = ReaderRolling.registerKeyEvents
+ReaderRolling.onRegisterDPadEvents = ReaderRolling.registerKeyEvents
 
 function ReaderRolling:onReadSettings(config)
     -- 20180503: some fix in crengine has changed the way the DOM is built
@@ -286,6 +290,8 @@ function ReaderRolling:onCloseDocument()
     UIManager:unschedule(self.onUpdatePos)
 
     self.current_header_height = nil -- show unload progress bar at top
+
+    self.ui.doc_settings:saveSetting("last_epubcfi", self.ui.document:getEPubCFIFromXPointer(self.xpointer))
 
     local cache_file_path = self.ui.document:getCacheFilePath() -- nil if no cache file
     self.ui.doc_settings:saveSetting("cache_file_path", cache_file_path)
@@ -1049,6 +1055,7 @@ function ReaderRolling:updatePos(force)
         -- A few things like page numbers may have changed
         self.ui.document:resetCallCache() -- be really sure this cache is reset
         self.ui.document:_readMetadata() -- get updated document height and nb of pages
+        self.view.footer.pages = self.ui.document:getPageCount()
         if self.hide_nonlinear_flows or force then
             self.ui.document:cacheFlows()
         end

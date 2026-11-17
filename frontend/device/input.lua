@@ -109,6 +109,8 @@ local Input = {
     event_map = nil, -- hash
     -- adapters are post processing functions that transform a given event to another event
     event_map_adapter = nil, -- hash
+    -- Optional physical-keyboard resolver. Printable presses emit TextInput when set.
+    hw_text_layout = nil,
     -- EV_ABS event to honor for pressure event (if any)
     pressure_event = nil,
 
@@ -141,7 +143,7 @@ local Input = {
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
             "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
             "Up", "Down", "Left", "Right", "Press", "Backspace", "End",
-            "Back", "Sym", "AA", "Menu", "Home", "Del", "ScreenKB",
+            "Back", "Sym", "AA", "Menu", "KeyHome", "Del", "ScreenKB",
             "LPgBack", "RPgBack", "LPgFwd", "RPgFwd"
         },
     },
@@ -161,16 +163,21 @@ local Input = {
 
     -- This might be modified at runtime, so we don't want any inheritance
     rotation_map = nil, -- hash
+    -- Input-device fds that must not follow screen rotation (e.g., external keyboards).
+    rotation_ignored_fds = {},
 
     timer_callbacks = nil, -- instance-specific table, because the object may get destroyed & recreated at runtime
     disable_double_tap = true,
+    allow_concurrent_taps = false,
     tap_interval_override = nil,
 
     -- keyboard state:
     modifiers = {
         Alt = false,
+        AltGr = false,
         Ctrl = false,
         Shift = false,
+        Super = false, -- Windows key, or "Command" key on Mac
         Sym = false,
         Meta = false,
         ScreenKB = false,
@@ -704,6 +711,15 @@ function Input:resetState()
     }
 end
 
+-- A modifier release can get lost (e.g., a BT keyboard dropping connection mid-press
+-- while going to sleep), which would leave that modifier stuck as pressed.
+function Input:resetModifierKeys()
+    for key in pairs(self.modifiers) do
+        self.modifiers[key] = false
+    end
+    self.keyboard_toggle_tapped = nil
+end
+
 function Input:handleKeyBoardEv(ev)
     -- Detect loss of contact for the "snow" protocol, as we *never* get EV_ABS:ABS_MT_TRACKING_ID:-1 on those...
     -- NOTE: The same logic *could* be used on *some* ST devices to detect contact states,
@@ -810,7 +826,7 @@ function Input:handleKeyBoardEv(ev)
 
     -- take device rotation into account
     local rota = self.device.screen:getRotationMode()
-    if self.rotation_map[rota][keycode] then
+    if not self.rotation_ignored_fds[ev.fd] and self.rotation_map[rota][keycode] then
         keycode = self.rotation_map[rota][keycode]
     end
 
@@ -898,6 +914,14 @@ function Input:handleKeyBoardEv(ev)
     end
 
     local key = Key:new(keycode, self.modifiers)
+
+    -- Emit composed physical-keyboard text on press; retain KeyPress for shortcuts.
+    if self.hw_text_layout and ev.value == KEY_PRESS then
+        local ch = self.hw_text_layout(keycode, self.modifiers)
+        if ch then
+            UIManager:sendEvent(Event:new("TextInput", ch))
+        end
+    end
 
     if ev.value == KEY_PRESS then
         return Event:new("KeyPress", key)
@@ -1264,6 +1288,110 @@ function Input:handleTouchEvPhoenix(ev)
         end
     end
 end
+
+function Input:handleBookeenTouchEvent(ev)
+    -- Pretty much the same as handleTouchEvPhoenix, but notice the
+    -- fix for ABS_MT_TRACKING_ID. On bookeen this starts at 1 for some
+    -- reason.
+    --
+    -- The 1-based tracking ID above comes from the vendor cyttsp4 driver's
+    -- `#ifdef cyevd_bookeen` branch, which reports `ABS_MT_TRACKING_ID, i+1`
+    -- (linux/drivers/input/touchscreen/cyttsp4/cyttsp4_mt_common.c:189) and
+    -- separates contacts with input_mt_sync() -- i.e. MT protocol *A*, where
+    -- the tracking ID doubles as the contact index and there is no ABS_MT_SLOT.
+    -- (Confirmed against the shipped /lib/modules/3.0.8+/cyttsp4_mt_b.ko in
+    -- rootfs.fex: the `#else` branch's dev_err strings are absent from the
+    -- binary while its siblings' are present.)
+    --
+    -- It is a protocol-A *reporting* style layered on a device that registered
+    -- MT slots anyway -- which is the trap here. cyttsp4_mtb.c:93 calls
+    -- input_mt_init_slots() unconditionally, outside the #ifdef, so dev->mt is
+    -- allocated even though the bookeen branch never emits ABS_MT_SLOT. That
+    -- turns on the kernel's per-slot value dedup (input.c:236-243) with
+    -- dev->slot pinned at 0: every MT value is compared against mt[0], and any
+    -- repeated ABS_MT_TRACKING_ID or ABS_MT_TOUCH_MAJOR is silently dropped as
+    -- "unchanged". So do not assume a contact re-announces itself every frame;
+    -- a drag's continuation frames may carry nothing but X/Y.
+    --
+    -- ABS_MT_SLOT is handled below purely defensively. Both touch drivers in
+    -- that modules directory currently compile the protocol-A style (gt9xx too:
+    -- `GTP_ICS_SLOT_REPORT 0` selects its `id+1` branch), so nothing here is
+    -- known to emit it -- but each carries a slot-based branch behind an #ifdef,
+    -- and which one a given CYB* model shipped is a build-time choice we cannot
+    -- see from here. A driver that never emits it pays nothing for the branch.
+    if ev.type == C.EV_ABS then
+        if ev.code == C.ABS_MT_SLOT then
+            -- Protocol B: addresses the contact directly, and is *not* subject
+            -- to the +1 offset below (that is a quirk of this driver's tracking
+            -- IDs, not of slot numbering).
+            self:setupSlotData(ev.value)
+        elseif ev.code == C.ABS_MT_TRACKING_ID then
+            if ev.value == -1 then
+                -- Lift. Must not go through setupSlotData: -1 is a sentinel, not
+                -- a slot number, and the slot to lift is the one ABS_MT_SLOT
+                -- already selected. Checked, because the kernel's liftoff path
+                -- (cyttsp4_report_slot_liftoff) emits this in an input frame of
+                -- its own, after SYN_REPORT cleared our reference list -- and an
+                -- unreferenced lift is a contact that never comes up.
+                self:setCurrentMtSlotChecked("id", -1)
+            else
+                if ev.value > 0 then
+                    ev.value = ev.value - 1
+                end
+                self:setupSlotData(ev.value)
+                self:setCurrentMtSlot("id", ev.value)
+            end
+        elseif ev.code == C.ABS_MT_TOUCH_MAJOR and ev.value == 0 then
+            -- All-contacts-up. The driver reports this as TOUCH_MAJOR 0 in a
+            -- frame of its own (cyttsp4_mt_common.c:203-208, the
+            -- `num_cur_tch == 0` case: TOUCH_MAJOR 0, input_mt_sync,
+            -- input_sync, nothing else). Since that frame stands alone, the
+            -- preceding SYN_REPORT already emptied our reference list, so a
+            -- plain setCurrentMtSlot would write the lift to a slot with no
+            -- live reference in MTSlots -- feedEvent only walks MTSlots, so the
+            -- lift would be dropped and the contact would stay down forever.
+            --
+            -- Lift only the *current* slot, via the Checked variant so the
+            -- reference exists.
+            --
+            -- Do NOT "helpfully" sweep ev_slots lifting every contact still
+            -- down. That was tried and it broke touch completely, because
+            -- addSlot() sets cur_slot as a side effect and pairs() order is
+            -- arbitrary: sweeping two known slots leaves cur_slot pointing at
+            -- whichever came last, not at the finger actually on the glass.
+            -- Normally the next TRACKING_ID would correct it -- but it cannot
+            -- here, because cyttsp4_mtb.c:93 calls input_mt_init_slots()
+            -- *unconditionally*, outside the #ifdef, so dev->mt is allocated and
+            -- the kernel's per-slot dedup in input_handle_abs_event() is live
+            -- (input.c:236-243). With no ABS_MT_SLOT ever emitted, dev->slot
+            -- stays 0, every contact is compared against mt[0], and a repeated
+            -- ABS_MT_TRACKING_ID is swallowed as "unchanged". Continuation
+            -- frames then carry only X/Y, which land in the corrupted slot
+            -- forever.
+            self:setCurrentMtSlotChecked("id", -1)
+        elseif ev.code == C.ABS_MT_POSITION_X then
+            self:setCurrentMtSlotChecked("x", ev.value)
+        elseif ev.code == C.ABS_MT_POSITION_Y then
+            self:setCurrentMtSlotChecked("y", ev.value)
+        end
+    elseif ev.type == C.EV_SYN then
+        if ev.code == C.SYN_REPORT then
+            for _, MTSlot in ipairs(self.MTSlots) do
+                self:setMtSlot(MTSlot.slot, "timev", time.timeval(ev.time))
+            end
+            -- feed ev in all slots to state machine
+            local touch_gestures = self.gesture_detector:feedEvent(self.MTSlots)
+            self:newFrame()
+            local ges_evs = {}
+            for _, touch_ges in ipairs(touch_gestures) do
+                self:gestureAdjustHook(touch_ges)
+                table.insert(ges_evs, Event:new("Gesture", self.gesture_detector:adjustGesCoordinate(touch_ges)))
+            end
+            return ges_evs
+        end
+    end
+end
+
 
 function Input:handleTouchEvLegacy(ev)
     -- Single Touch Protocol.

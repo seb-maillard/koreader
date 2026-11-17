@@ -222,7 +222,7 @@ function CreDocument:setAltDocumentProp(prop, value)
 end
 
 function CreDocument:setupDefaultView()
-    if self.loaded then
+    if self._loaded then
         -- Don't apply defaults if the document has already been loaded
         -- as this must be done before calling loadDocument()
         return
@@ -887,6 +887,22 @@ end
 
 function CreDocument:getPageXPointer(page)
     return self._document:getPageXPointer(page)
+end
+
+function CreDocument:getEPubCFI()
+    return self._document:getEPubCFI()
+end
+
+function CreDocument:getPageEPubCFI(page)
+    return self._document:getPageEPubCFI(page)
+end
+
+function CreDocument:getEPubCFIFromXPointer(xp)
+    return self._document:getEPubCFIFromXPointer(xp)
+end
+
+function CreDocument:getEPubCFIRangeFromXPointers(start_xp, end_xp)
+    return self._document:getEPubCFIRangeFromXPointers(start_xp, end_xp)
 end
 
 function CreDocument:isXPointerInDocument(xp)
@@ -1593,6 +1609,7 @@ function CreDocument:register(registry)
     registry:addProvider("chm", "application/vnd.ms-htmlhelp", self, 90)
     registry:addProvider("doc", "application/msword", self, 90)
     registry:addProvider("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", self, 90)
+    registry:addProvider("docx", "application/docx", self, 90) -- Alternative mimetype for OPDS.
     registry:addProvider("docm", "application/vnd.ms-word.document.macroEnabled.12", self, 90)
     registry:addProvider("epub", "application/epub+zip", self, 100)
     registry:addProvider("epub", "application/epub", self, 100) -- Alternative mimetype for OPDS.
@@ -1932,6 +1949,7 @@ function CreDocument:setupCallCache()
             elseif name == "getScreenPositionFromXPointer" then cache_by_tag = true
             elseif name == "getNearestWordFromPosition" then cache_by_tag = true
             elseif name == "getXPointer" then cache_by_tag = true
+            elseif name == "getEPubCFI" then cache_by_tag = true
             elseif name == "isXPointerInCurrentPage" then cache_by_tag = true
             elseif name == "getPageMapCurrentPageLabel" then cache_by_tag = true
             elseif name == "getPageMapVisiblePageLabels" then cache_by_tag = true

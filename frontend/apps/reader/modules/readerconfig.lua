@@ -35,7 +35,12 @@ function ReaderConfig:onGesture() end
 
 function ReaderConfig:registerKeyEvents()
     if Device:hasKeys() then
-        self.key_events.ShowConfigMenu = { { { "Press", "AA" } } }
+        local key = Device:hasScreenKB() and "ScreenKBPress" or "AA"
+        self.key_events.ShowConfigMenu = { { key } }
+        -- Hotkeys adds by default "Press" as another ShowConfigMenu shortcut
+        if Device:hasFewKeys() then
+            self.key_events.ShowConfigMenu = { { "Press" } }
+        end
     end
 end
 

@@ -31,6 +31,7 @@ local posix = require("ffi/posix")
 local time = require("ui/time")
 local util  = require("util")
 local _ = require("gettext")
+local C_ = _.pgettext
 local Input = Device.input
 local T = ffiUtil.template
 local android = Device:isAndroid() and require("android")
@@ -514,6 +515,9 @@ function ReaderDictionary:_genCustomizeButtonsMenu()
         { text = _("Close"),           id = "close" },
         { text = _("Translate"),       id = "translate" },
     }
+    if Device:hasClipboard() then
+        table.insert(available_options, { text = C_("Text", "Copy"), id = "copy" })
+    end
     if Device:hasDPad() then
         table.insert(available_options, { text = _("Text selection"), id = "text_selection" })
     end
@@ -1589,7 +1593,10 @@ function ReaderDictionary:showNoResultsDialog(word, dict_names, fuzzy_search, bo
                 if new_word == "" then return end
                 UIManager:close(dialog)
                 -- Re-run the lookup with the (possibly edited) word and fuzzy enabled.
-                self:stardictLookup(new_word, dict_names, true, boxes, link, dict_close_callback)
+                -- Wrapped through Trapper, as we may be using Trapper:dismissablePopen() in it
+                Trapper:wrap(function()
+                    self:stardictLookup(new_word, dict_names, true, boxes, link, dict_close_callback)
+                end)
             end,
         }
     elseif has_presets then

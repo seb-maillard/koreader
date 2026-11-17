@@ -127,6 +127,18 @@ local sub_item_table = {
                         end,
                     },
                     {
+                        text = _("Crop cover to fit screen"),
+                        checked_func = function()
+                            return G_reader_settings:isTrue("screensaver_images_crop_to_fit")
+                        end,
+                        callback = function()
+                            G_reader_settings:flipNilOrFalse("screensaver_images_crop_to_fit")
+                            if G_reader_settings:isTrue("screensaver_images_crop_to_fit") then
+                                G_reader_settings:makeFalse("screensaver_stretch_images")
+                            end
+                        end,
+                    },
+                    {
                         text = _("Rotate cover for best fit"),
                         checked_func = function()
                             return G_reader_settings:isTrue("screensaver_rotate_auto_for_best_fit")
@@ -134,7 +146,7 @@ local sub_item_table = {
                         callback = function()
                             G_reader_settings:flipNilOrFalse("screensaver_rotate_auto_for_best_fit")
                         end,
-                    }
+                    },
                 },
             },
             {
@@ -167,7 +179,7 @@ local sub_item_table = {
                         end,
                         keep_menu_open = true,
                         callback = function()
-                            Screensaver:setMessage(true)
+                            Screensaver:setMessage(ui, true)
                         end,
                     },
                 },
@@ -228,7 +240,7 @@ local sub_item_table = {
                 end,
                 keep_menu_open = true,
                 callback = function()
-                    Screensaver:setMessage()
+                    Screensaver:setMessage(ui)
                 end,
             },
             {
